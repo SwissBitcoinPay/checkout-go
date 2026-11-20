@@ -1,0 +1,28 @@
+# Pull requests that keep the actions and the module's dependencies up to date: one pull request per
+# ecosystem, grouping all its updates. Each waits a week after a release (cooldown): time for a
+# compromised release to be found and pulled before it reaches this repository. The tools of
+# scripts/check.sh (staticcheck, govulncheck), the Go toolchains of the CI's matrix ("1.26.x",
+# "1.27.x": their latest patch at each run) and Zig follow by hand.
+version: 2
+updates:
+  # The SHA-pinned actions of .github/workflows/, in one pull request.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # The module's dependencies, pinned exactly in go.mod and go.sum, in one pull request.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      gomod:
+        patterns: ["*"]

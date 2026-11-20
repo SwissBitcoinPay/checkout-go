@@ -1,0 +1,85 @@
+name: CI
+
+# Every pull request and every push to main: the pinned copy of the specification, format, vet,
+# lint, the module's files, the tests (against its conformance vectors, local relays and fakes: no
+# network) with the race detector, the build and the known vulnerabilities, on every supported
+# version of Go.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  checks:
+    name: Checks (Go ${{ matrix.go }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # go.mod: Go 1.26.10 or later; the two release lines Go supports, at their latest patch.
+        go: ["1.26.x", "1.27.x"]
+    env:
+      # The toolchain setup-go installed, never one go.mod would download.
+      GOTOOLCHAIN: local
+    steps:
+      # RUNNER_TEMP is the job's own directory, emptied at its start and end: temporary files, and
+      # the tools and caches the job installs, go there. Set here: the job's `env` cannot read the
+      # runner context.
+      - name: Use the runner's own temporary directory
+        run: |
+          {
+            echo "TMPDIR=$RUNNER_TEMP"
+            echo "GOPATH=$RUNNER_TEMP/go"
+            echo "GOMODCACHE=$RUNNER_TEMP/go/pkg/mod"
+            echo "GOCACHE=$RUNNER_TEMP/go-build"
+          } >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # No cache: the module's few dependencies download in seconds.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ matrix.go }}
+          cache: false
+      # The race detector needs cgo, so a C compiler: the runner's when it has one, else Zig's
+      # (a pinned release, its SHA-256 checked), installed without root.
+      - name: A C compiler for the race detector
+        env:
+          ZIG_VERSION: 0.17.1
+          ZIG_SHA256: 3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a
+        run: |
+          if command -v cc > /dev/null; then
+            echo "C compiler: $(command -v cc)"
+            exit 0
+          fi
+          archive="$RUNNER_TEMP/zig.tar.xz"
+          curl --fail --silent --show-error --location --output "$archive" \
+            "https://ziglang.org/download/$ZIG_VERSION/zig-x86_64-linux-$ZIG_VERSION.tar.xz"
+          echo "$ZIG_SHA256  $archive" | sha256sum --check --strict
+          tar --extract --xz --file "$archive" --directory "$RUNNER_TEMP"
+          zig="$RUNNER_TEMP/zig-x86_64-linux-$ZIG_VERSION/zig"
+          {
+            echo "CC=$zig cc"
+            echo "CXX=$zig c++"
+            echo "ZIG_GLOBAL_CACHE_DIR=$RUNNER_TEMP/zig-cache"
+            echo "ZIG_LOCAL_CACHE_DIR=$RUNNER_TEMP/zig-cache"
+          } >> "$GITHUB_ENV"
+          echo "C compiler: Zig $ZIG_VERSION"
+      - run: go version
+      - run: scripts/check.sh spec
+      - run: scripts/check.sh format
+      - run: scripts/check.sh vet
+      - run: scripts/check.sh lint
+      - run: scripts/check.sh mod
+      - run: scripts/check.sh test
+      - run: scripts/check.sh build
+      - run: scripts/check.sh vuln
